@@ -1,0 +1,107 @@
+name: Validate members and auto-merge
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  validate-member-images:
+    name: validate-member-images
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Validate changed files in members
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          invalid=0
+          changed=0
+
+          while IFS= read -r -d '' path; do
+            changed=$((changed + 1))
+
+            # 1. Reject modification of members/README.md
+            if [[ "$path" == "members/README.md" ]]; then
+              echo "::error file=$path::The members/README.md placeholder may not be modified."
+              invalid=1
+              continue
+            fi
+
+            # 2. Reject changes outside members/
+            if [[ "$path" != members/* ]]; then
+              echo "::error file=$path::Pull requests may only change files inside members/."
+              invalid=1
+              continue
+            fi
+
+            # If the file was removed, skip MIME check
+            if [[ ! -e "$path" ]]; then
+              continue
+            fi
+
+            # 3. Check allowed file extensions
+            case "${path,,}" in
+              *.jpg|*.jpeg|*.png|*.gif|*.webp|*.avif) ;;
+              *)
+                echo "::error file=$path::Only JPG, JPEG, PNG, GIF, WEBP, and AVIF files are allowed in members/."
+                invalid=1
+                continue
+                ;;
+            esac
+
+            # 4. Check actual file MIME type
+            mime_type="$(file --brief --mime-type -- "$path")"
+            if [[ "$mime_type" != image/* ]]; then
+              echo "::error file=$path::The file extension looks like an image, but its detected type is $mime_type."
+              invalid=1
+              continue
+            fi
+          done < <(git diff --name-only -z "$BASE_SHA...$HEAD_SHA")
+
+          if (( changed == 0 )); then
+            echo "::error::No files changed in this pull request."
+            exit 1
+          fi
+
+          if (( invalid )); then
+            echo "::error::Some changed files did not pass validation."
+            exit 1
+          fi
+
+          echo "✅ All $changed changed file(s) in members/ are valid images."
+
+  auto-merge:
+    name: Auto Merge Pull Request
+    needs: validate-member-images
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.draft == false
+    steps:
+      - name: Enable Auto-Merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          echo "Processing auto-merge for $PR_URL..."
+          # Attempt auto-merge (or direct merge if conditions are met)
+          if gh pr merge --auto --merge "$PR_URL"; then
+            echo "🎉 Successfully enabled auto-merge for $PR_URL"
+          elif gh pr merge --merge "$PR_URL"; then
+            echo "🎉 Successfully merged $PR_URL directly"
+          else
+            echo "::warning::Could not automatically merge PR. Please verify repository settings (Allow auto-merge, Workflow permissions)."
+            exit 1
+          fi

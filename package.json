@@ -1,0 +1,13 @@
+{
+  "name": "gdgoc-members-wall",
+  "version": "1.0.0",
+  "description": "Interactive members wall for GDG on Campus NSYSU",
+  "scripts": {
+    "build": "node build.js",
+    "generate-photos": "node generate-photos.js"
+  },
+  "dependencies": {
+    "sharp": "^0.33.5"
+  }
+}
+
